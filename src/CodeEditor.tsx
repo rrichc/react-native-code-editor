@@ -42,6 +42,16 @@ export type CodeEditorStyleType = SyntaxHighlighterStyleType & {
     marginBottom?: string | number;
 
     /**
+     * Editor minimum height.
+     */
+    minHeight?: string | number;
+
+    /**
+     * Editor maximum height.
+     */
+    maxHeight?: string | number;
+
+    /**
      * Use this property to align the text input with the syntax highlighter text.
      * @see highlighterLineHeight
      */
@@ -105,18 +115,30 @@ type Props = {
     autoFocus?: boolean;
 
     /**
+     * Whether to enable auto-growth based on content
+     */
+    autoGrow?: boolean;
+
+    /**
      * Test ID used for testing.
      */
     testID?: string;
 };
 
 type PropsWithForwardRef = Props & {
-    forwardedRef: React.Ref<TextInput>;
+    forwardedRef: React.Ref<CodeEditorRef>;
 };
 
 type TextInputSelectionType = {
     start: number;
     end: number;
+};
+
+export type CodeEditorRef = Omit<TextInput, keyof React.Component> & {
+    /**
+     * Get the current code value
+     */
+    getValue: () => string;
 };
 
 const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
@@ -130,6 +152,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
         showLineNumbers = false,
         readOnly = false,
         autoFocus = true,
+        autoGrow = false,
         testID,
         forwardedRef,
     } = props;
@@ -137,6 +160,8 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     const {
         width = undefined,
         height = undefined,
+        minHeight = undefined,
+        maxHeight = undefined,
         marginTop = undefined,
         marginBottom = undefined,
         inputLineHeight = undefined,
@@ -151,6 +176,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     } = addedStyle;
 
     const [value, setValue] = useState<string>(initialValue);
+    const [contentHeight, setContentHeight] = useState<number>(0);
     const highlighterRef = useRef<ScrollView>(null);
     const inputRef = useRef<TextInput>(null);
     const inputSelection = useRef<TextInputSelectionType>({ start: 0, end: 0 });
@@ -158,8 +184,26 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     // Only when line numbers are showing
     const lineNumbersPadding = showLineNumbers ? 1.75 * fontSize : undefined;
 
-    // Sync forwardedRef with inputRef
-    useImperativeHandle(forwardedRef, () => inputRef.current!, [inputRef]);
+    // Sync forwardedRef with inputRef and add getValue method
+    useImperativeHandle<CodeEditorRef, CodeEditorRef>(
+        forwardedRef,
+        () => {
+            const input = inputRef.current;
+            if (!input) {
+                throw new Error('Input ref is not initialized');
+            }
+
+            return {
+                ...input,
+                getValue: () => value,
+                // Explicitly exclude React.Component methods
+                setState: undefined as any,
+                forceUpdate: undefined as any,
+                render: undefined as any,
+            };
+        },
+        [inputRef, value]
+    );
 
     useEffect(() => {
         if (onChange) {
@@ -243,8 +287,36 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
         inputSelection.current = e.nativeEvent.selection;
     };
 
+    const handleContentSizeChange = (e: { nativeEvent: { contentSize: { height: number } } }) => {
+        if (autoGrow) {
+            const newHeight = e.nativeEvent.contentSize.height;
+            const maxHeightNum =
+                typeof maxHeight === 'string' ? parseInt(maxHeight, 10) : maxHeight;
+            const minHeightNum =
+                typeof minHeight === 'string' ? parseInt(minHeight, 10) : minHeight;
+
+            if (maxHeightNum && newHeight > maxHeightNum) {
+                setContentHeight(maxHeightNum);
+            } else if (minHeightNum && newHeight < minHeightNum) {
+                setContentHeight(minHeightNum);
+            } else {
+                setContentHeight(newHeight);
+            }
+        }
+    };
+
+    const finalHeight = autoGrow ? contentHeight || height : height;
+
     return (
-        <View style={{ width, height, marginTop, marginBottom }} testID={testID}>
+        <View
+            style={{
+                width,
+                height: finalHeight,
+                marginTop,
+                marginBottom,
+            }}
+            testID={testID}
+        >
             <SyntaxHighlighter
                 language={language}
                 addedStyle={addedStyle}
@@ -267,6 +339,8 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                         padding,
                         paddingTop: padding,
                         paddingLeft: lineNumbersPadding,
+                        minHeight,
+                        maxHeight,
                     },
                 ]}
                 value={value}
@@ -274,6 +348,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 onScroll={handleScroll}
                 onKeyPress={handleKeyPress}
                 onSelectionChange={handleSelectionChange}
+                onContentSizeChange={handleContentSizeChange}
                 autoCapitalize="none"
                 autoComplete="off"
                 autoCorrect={false}
@@ -288,7 +363,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     );
 };
 
-const CodeEditorWithForwardRef = React.forwardRef<TextInput, Props>((props, ref) => (
+const CodeEditorWithForwardRef = React.forwardRef<CodeEditorRef, Props>((props, ref) => (
     <CodeEditor {...props} forwardedRef={ref} />
 ));
 
