@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, ScrollView, Text, Platform, ColorValue, TextStyle } from 'react-native';
 import Highlighter, { SyntaxHighlighterProps as HighlighterProps } from 'react-syntax-highlighter';
 import * as HLJSSyntaxStyles from 'react-syntax-highlighter/dist/esm/styles/hljs';
@@ -131,6 +131,18 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
     // Prevents the last line from clipping when scrolling
     highlighterProps.children += '\n\n';
 
+    // Force scroll to top when the component mounts and when content changes
+    useEffect(() => {
+        // Use setTimeout to ensure this runs after the component has rendered
+        const timeoutId = setTimeout(() => {
+            if (forwardedRef && 'current' in forwardedRef && forwardedRef.current) {
+                forwardedRef.current.scrollTo({ x: 0, y: 0, animated: false });
+            }
+        }, 0);
+        
+        return () => clearTimeout(timeoutId);
+    }, [forwardedRef, highlighterProps.children]);
+
     const cleanStyle = (style: TextStyle) => {
         const clean: TextStyle = {
             ...style,
@@ -245,12 +257,17 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
                 ref={forwardedRef}
                 scrollEnabled={scrollEnabled}
                 automaticallyAdjustContentInsets={false}
-                scrollsToTop={true}
                 contentOffset={{ x: 0, y: 0 }}
                 showsVerticalScrollIndicator={true}
                 keyboardShouldPersistTaps="handled"
                 overScrollMode="never"
                 scrollEventThrottle={16}
+                onContentSizeChange={() => {
+                    // Force scroll to top whenever content size changes
+                    if (forwardedRef && 'current' in forwardedRef && forwardedRef.current) {
+                        forwardedRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                    }
+                }}
             >
                 {showLineNumbers && renderLineNumbersBackground()}
                 {renderNode(rows)}

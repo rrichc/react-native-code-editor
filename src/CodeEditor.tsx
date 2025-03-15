@@ -10,6 +10,7 @@ import {
     TextInputScrollEventData,
     TextInputKeyPressEventData,
     TextInputSelectionChangeEventData,
+    InteractionManager,
 } from 'react-native';
 import SyntaxHighlighter, {
     SyntaxHighlighterStyleType,
@@ -180,6 +181,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     const highlighterRef = useRef<ScrollView>(null);
     const inputRef = useRef<TextInput>(null);
     const inputSelection = useRef<TextInputSelectionType>({ start: 0, end: 0 });
+    const initialRenderComplete = useRef<boolean>(false);
 
     // Only when line numbers are showing
     const lineNumbersPadding = showLineNumbers ? 1.75 * fontSize : undefined;
@@ -211,12 +213,50 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
         }
     }, [onChange, value]);
 
-    // Effect to ensure scroll position remains at the top
     useEffect(() => {
-        // Reset scroll position to top when content changes
-        highlighterRef.current?.scrollTo({ y: 0, animated: false });
-        inputRef.current?.setNativeProps({ text: value });
+        // Reset scroll position to top on mount and when value changes
+        const resetToTop = () => {
+            if (highlighterRef.current) {
+                highlighterRef.current.scrollTo({ y: 0, animated: false });
+            }
+        };
+
+        // Reset immediately and then again after a short delay to ensure it's applied
+        resetToTop();
+
+        const timeoutId = setTimeout(resetToTop, 50);
+
+        // Also do it after all other interactions are complete
+        const interactionSubscription = InteractionManager.runAfterInteractions(() => {
+            resetToTop();
+        });
+
+        return () => {
+            clearTimeout(timeoutId);
+            interactionSubscription.cancel();
+        };
     }, [value]);
+
+    // Additional effect that runs only once after initial render
+    useEffect(() => {
+        if (!initialRenderComplete.current) {
+            // Set a flag to ensure this runs only once
+            initialRenderComplete.current = true;
+
+            // Use multiple timeouts at different intervals to ensure scroll is reset
+            const timeouts = [100, 300, 500].map((delay) =>
+                setTimeout(() => {
+                    if (highlighterRef.current) {
+                        highlighterRef.current.scrollTo({ y: 0, animated: false });
+                    }
+                }, delay)
+            );
+
+            return () => {
+                timeouts.forEach(clearTimeout);
+            };
+        }
+    }, []);
 
     // Negative values move the cursor to the left
     const moveCursor = (current: number, amount: number) => {
@@ -261,8 +301,12 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
 
     const handleChangeText = (text: string) => {
         setValue(Strings.convertTabsToSpaces(text));
-        // Ensure position stays at the top after text change
-        highlighterRef.current?.scrollTo({ y: 0, animated: false });
+        // Force scroll back to top after text changes
+        requestAnimationFrame(() => {
+            if (highlighterRef.current) {
+                highlighterRef.current.scrollTo({ y: 0, animated: false });
+            }
+        });
     };
 
     const handleScroll = (e: NativeSyntheticEvent<TextInputScrollEventData>) => {
@@ -312,6 +356,11 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 setContentHeight(newHeight);
             }
         }
+
+        // Ensure scroll is at the top when content size changes
+        if (highlighterRef.current) {
+            highlighterRef.current.scrollTo({ y: 0, animated: false });
+        }
     };
 
     const finalHeight = autoGrow ? contentHeight || height : height;
@@ -325,6 +374,12 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 marginBottom,
             }}
             testID={testID}
+            onLayout={() => {
+                // Force scroll to top when layout occurs
+                if (highlighterRef.current) {
+                    highlighterRef.current.scrollTo({ y: 0, animated: false });
+                }
+            }}
         >
             <SyntaxHighlighter
                 language={language}
