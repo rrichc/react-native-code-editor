@@ -183,9 +183,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     const highlighterRef = useRef<ScrollView>(null);
     const inputRef = useRef<TextInput>(null);
     const inputSelection = useRef<TextInputSelectionType>({ start: 0, end: 0 });
-    const initialRenderComplete = useRef<boolean>(false);
-    const valueChangeCount = useRef<number>(0);
-    const shouldMaintainScrollTop = useRef<boolean>(true);
+    const isInitialRender = useRef<boolean>(true);
 
     // Only when line numbers are showing
     const lineNumbersPadding = showLineNumbers ? 1.75 * fontSize : undefined;
@@ -217,73 +215,43 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
         }
     }, [onChange, value]);
 
-    // Define a more thorough approach to ensuring the scroll position is at the top
+    // Only force scroll to top on initial render
     const forceScrollToTop = () => {
-        if (!highlighterRef.current) return;
+        if (!highlighterRef.current || !isInitialRender.current) return;
 
         // Immediate attempt
         highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
 
-        // Multiple follow-up attempts with increasingly longer delays
-        [0, 50, 150, 300].forEach((delay) => {
+        // Follow-up attempts with increasing delays
+        const timeouts = [0, 50, 150, 300].map((delay) =>
             setTimeout(() => {
-                highlighterRef.current?.scrollTo({ x: 0, y: 0, animated: false });
-            }, delay);
-        });
-    };
-
-    // Value changes should trigger a scroll to top reset
-    useEffect(() => {
-        valueChangeCount.current += 1;
-        shouldMaintainScrollTop.current = true;
-        forceScrollToTop();
-    }, [value]);
-
-    // Aggressive approach to ensure we start at the top on initial render
-    useLayoutEffect(() => {
-        shouldMaintainScrollTop.current = true;
-        forceScrollToTop();
-
-        // If autoFocus is true, wait until we've reset scroll before focusing
-        if (autoFocus && inputRef.current && !initialRenderComplete.current) {
-            // Delay focus to avoid scroll position issues
-            setTimeout(() => {
-                if (inputRef.current) {
-                    inputRef.current.focus();
-                    initialRenderComplete.current = true;
+                if (isInitialRender.current && highlighterRef.current) {
+                    highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
                 }
-            }, 250);
-        }
-    }, [autoFocus]);
+            }, delay)
+        );
 
-    // Let's add a simple function to explicitly scroll to the top
-    const scrollToTop = () => {
-        if (highlighterRef.current) {
-            highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
-        }
+        return () => timeouts.forEach(clearTimeout);
     };
 
-    // Force scroll to top after initial render
-    useEffect(() => {
-        // Use setTimeout to ensure this runs after rendering
-        const initialTimeoutId = setTimeout(scrollToTop, 0);
+    // Initial render effects
+    useLayoutEffect(() => {
+        // Force scroll to top on initial render
+        const cleanupTimeouts = forceScrollToTop();
 
-        // Also reset when content changes
-        const handleInitialRender = () => {
+        // After some time, mark initial render as complete
+        const finalTimeout = setTimeout(() => {
+            isInitialRender.current = false;
+
             // Apply focus after scroll is reset if autoFocus is true
-            if (autoFocus && inputRef.current && !initialRenderComplete.current) {
+            if (autoFocus && inputRef.current) {
                 inputRef.current.focus();
-                initialRenderComplete.current = true;
             }
-            scrollToTop();
-        };
-
-        // Use multiple timeouts to ensure it works
-        const timeouts = [50, 150, 300].map((delay) => setTimeout(handleInitialRender, delay));
+        }, 500);
 
         return () => {
-            clearTimeout(initialTimeoutId);
-            timeouts.forEach(clearTimeout);
+            if (cleanupTimeouts) cleanupTimeouts();
+            clearTimeout(finalTimeout);
         };
     }, [autoFocus]);
 
@@ -330,23 +298,20 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
 
     const handleChangeText = (text: string) => {
         setValue(Strings.convertTabsToSpaces(text));
-        // Signal that we need to maintain scroll position at top
-        shouldMaintainScrollTop.current = true;
+        // Don't scroll to top on content changes - user may be editing elsewhere in the document
     };
 
     const handleScroll = (e: NativeSyntheticEvent<TextInputScrollEventData>) => {
-        // Only match text input scroll with syntax highlighter scroll when not resetting
-        if (!shouldMaintainScrollTop.current) {
-            const y = e.nativeEvent.contentOffset.y;
-            highlighterRef.current?.scrollTo({ y, animated: false });
-        }
+        // Match text input scroll with syntax highlighter scroll
+        const y = e.nativeEvent.contentOffset.y;
+        highlighterRef.current?.scrollTo({ y, animated: false });
     };
 
     // Reset the scroll maintenance flag after a period of time
     useEffect(() => {
-        if (shouldMaintainScrollTop.current) {
+        if (isInitialRender.current) {
             const timer = setTimeout(() => {
-                shouldMaintainScrollTop.current = false;
+                isInitialRender.current = false;
             }, 500);
             return () => clearTimeout(timer);
         }
@@ -411,7 +376,12 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 marginBottom,
             }}
             testID={testID}
-            onLayout={forceScrollToTop}
+            onLayout={() => {
+                // Only force scroll to top on initial layout
+                if (isInitialRender.current && highlighterRef.current) {
+                    highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                }
+            }}
         >
             <SyntaxHighlighter
                 language={language}
@@ -448,7 +418,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 autoCapitalize="none"
                 autoComplete="off"
                 autoCorrect={false}
-                autoFocus={false} // We'll handle focus manually for better control
+                autoFocus={false} // We'll handle focus manually after scroll initialization
                 keyboardType="ascii-capable"
                 editable={!readOnly}
                 testID={`${testID}-text-input`}
