@@ -211,6 +211,13 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
         }
     }, [onChange, value]);
 
+    // Effect to ensure scroll position remains at the top
+    useEffect(() => {
+        // Reset scroll position to top when content changes
+        highlighterRef.current?.scrollTo({ y: 0, animated: false });
+        inputRef.current?.setNativeProps({ text: value });
+    }, [value]);
+
     // Negative values move the cursor to the left
     const moveCursor = (current: number, amount: number) => {
         const newPosition = current + amount;
@@ -254,6 +261,8 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
 
     const handleChangeText = (text: string) => {
         setValue(Strings.convertTabsToSpaces(text));
+        // Ensure position stays at the top after text change
+        highlighterRef.current?.scrollTo({ y: 0, animated: false });
     };
 
     const handleScroll = (e: NativeSyntheticEvent<TextInputScrollEventData>) => {

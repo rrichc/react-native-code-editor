@@ -244,6 +244,13 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
                 testID={`${testID}-scroll-view`}
                 ref={forwardedRef}
                 scrollEnabled={scrollEnabled}
+                automaticallyAdjustContentInsets={false}
+                scrollsToTop={true}
+                contentOffset={{ x: 0, y: 0 }}
+                showsVerticalScrollIndicator={true}
+                keyboardShouldPersistTaps="handled"
+                overScrollMode="never"
+                scrollEventThrottle={16}
             >
                 {showLineNumbers && renderLineNumbersBackground()}
                 {renderNode(rows)}
