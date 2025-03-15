@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useLayoutEffect } from 'react';
-import { View, ScrollView, Text, Platform, ColorValue, TextStyle } from 'react-native';
+import { View, ScrollView, Text, Platform, ColorValue, TextStyle, findNodeHandle } from 'react-native';
 import Highlighter, { SyntaxHighlighterProps as HighlighterProps } from 'react-syntax-highlighter';
 import * as HLJSSyntaxStyles from 'react-syntax-highlighter/dist/esm/styles/hljs';
 
@@ -152,18 +152,40 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
     // Prevents the last line from clipping when scrolling
     highlighterProps.children += '\n\n';
 
-    // Force scroll to top only on initial render or if preserveScrollPosition is false
+    // More aggressive approach to ensure scroll is at top on initial render
     const forceScrollToTop = () => {
         if (!scrollViewRef.current || (preserveScrollPosition && !isInitialRender.current)) return;
         
-        // Immediate attempt
-        scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+        // Use multiple strategies to ensure we start at the top
+        try {
+            // Direct method
+            scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+            
+            // Try with a node handle if available (React Native specific)
+            const nodeHandle = findNodeHandle(scrollViewRef.current);
+            if (nodeHandle) {
+                // Force a reset of the ScrollView's internal state
+                scrollViewRef.current.setNativeProps({
+                    contentOffset: { x: 0, y: 0 }
+                });
+            }
+        } catch (err) {
+            console.warn('Failed to force scroll to top:', err);
+        }
         
-        // Follow-up attempts with increasing delays
-        const timeouts = [0, 50, 150].map(delay => 
+        // Additional attempts with delays for reliability
+        const timeouts = [0, 50, 150, 300, 500].map(delay => 
             setTimeout(() => {
-                if ((isInitialRender.current || !preserveScrollPosition) && scrollViewRef.current) {
+                if (!scrollViewRef.current || 
+                    (preserveScrollPosition && !isInitialRender.current)) return;
+                
+                try {
                     scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                    scrollViewRef.current.setNativeProps({
+                        contentOffset: { x: 0, y: 0 }
+                    });
+                } catch (err) {
+                    // Ignore errors in timeouts
                 }
             }, delay)
         );
@@ -172,31 +194,31 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
         return () => timeouts.forEach(clearTimeout);
     };
     
-    // Check if content has changed, if so we need to force scroll to top
-    useEffect(() => {
-        const newContentKey = `${highlighterProps.children}`;
-        if (contentKey.current !== newContentKey) {
-            contentKey.current = newContentKey;
-            if (!preserveScrollPosition) {
-                forceScrollToTop();
-            }
-        }
-    }, [highlighterProps.children, preserveScrollPosition]);
-    
-    // On mount, force scroll to top and mark initial render as complete
+    // On mount and when dependenices change, force scroll to top
     useLayoutEffect(() => {
         const cleanupTimeouts = forceScrollToTop();
         
         // After all attempts, mark initial render as complete
         const finalTimeout = setTimeout(() => {
             isInitialRender.current = false;
-        }, 300);
+        }, 600);
         
         return () => {
             if (cleanupTimeouts) cleanupTimeouts();
             clearTimeout(finalTimeout);
         };
     }, [preserveScrollPosition]);
+    
+    // Check if content has changed
+    useEffect(() => {
+        const newContentKey = `${highlighterProps.children}`;
+        if (contentKey.current !== newContentKey) {
+            contentKey.current = newContentKey;
+            if (!preserveScrollPosition || isInitialRender.current) {
+                forceScrollToTop();
+            }
+        }
+    }, [highlighterProps.children, preserveScrollPosition]);
 
     const cleanStyle = (style: TextStyle) => {
         const clean: TextStyle = {
@@ -321,9 +343,16 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
                         }
                     }
                     
-                    // Force scroll to top on ref set only if initial render or preserveScrollPosition is false
+                    // Immediately force scroll to top when ref is set if it's initial render
                     if (ref && (isInitialRender.current || !preserveScrollPosition)) {
-                        ref.scrollTo({ x: 0, y: 0, animated: false });
+                        try {
+                            ref.scrollTo({ x: 0, y: 0, animated: false });
+                            ref.setNativeProps({
+                                contentOffset: { x: 0, y: 0 }
+                            });
+                        } catch (err) {
+                            console.warn('Failed to set initial scroll position:', err);
+                        }
                     }
                 }}
                 scrollEnabled={scrollEnabled}
@@ -333,18 +362,36 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
                 overScrollMode="never"
                 scrollEventThrottle={16}
                 keyboardDismissMode="none"
-                maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+                // Explicitly set initial scroll position to top
+                contentOffset={{x: 0, y: 0}}
+                // Prevent any auto-scrolling to cursor/focused element
+                maintainVisibleContentPosition={{autoscrollToTopThreshold: 0, minIndexForVisible: 0}}
                 automaticallyAdjustsScrollIndicatorInsets={false}
+                // Disable all automatic scroll adjustments
                 contentInsetAdjustmentBehavior="never"
                 directionalLockEnabled={true}
                 onContentSizeChange={() => {
                     if ((isInitialRender.current || !preserveScrollPosition) && scrollViewRef.current) {
-                        scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                        try {
+                            scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                            scrollViewRef.current.setNativeProps({
+                                contentOffset: { x: 0, y: 0 }
+                            });
+                        } catch (err) {
+                            // Ignore errors in callbacks
+                        }
                     }
                 }}
                 onLayout={() => {
                     if ((isInitialRender.current || !preserveScrollPosition) && scrollViewRef.current) {
-                        scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                        try {
+                            scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                            scrollViewRef.current.setNativeProps({
+                                contentOffset: { x: 0, y: 0 }
+                            });
+                        } catch (err) {
+                            // Ignore errors in callbacks
+                        }
                     }
                 }}
             >
