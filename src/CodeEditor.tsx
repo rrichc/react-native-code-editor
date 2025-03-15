@@ -1,4 +1,4 @@
-import React, { useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { useEffect, useImperativeHandle, useRef, useState, useLayoutEffect } from 'react';
 import {
     View,
     TextInput,
@@ -184,6 +184,8 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     const inputRef = useRef<TextInput>(null);
     const inputSelection = useRef<TextInputSelectionType>({ start: 0, end: 0 });
     const initialRenderComplete = useRef<boolean>(false);
+    const valueChangeCount = useRef<number>(0);
+    const shouldMaintainScrollTop = useRef<boolean>(true);
 
     // Only when line numbers are showing
     const lineNumbersPadding = showLineNumbers ? 1.75 * fontSize : undefined;
@@ -215,50 +217,44 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
         }
     }, [onChange, value]);
 
-    useEffect(() => {
-        // Reset scroll position to top on mount and when value changes
-        const resetToTop = () => {
-            if (highlighterRef.current) {
-                highlighterRef.current.scrollTo({ y: 0, animated: false });
-            }
-        };
+    // Define a more thorough approach to ensuring the scroll position is at the top
+    const forceScrollToTop = () => {
+        if (!highlighterRef.current) return;
 
-        // Reset immediately and then again after a short delay to ensure it's applied
-        resetToTop();
+        // Immediate attempt
+        highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
 
-        const timeoutId = setTimeout(resetToTop, 50);
-
-        // Also do it after all other interactions are complete
-        const interactionSubscription = InteractionManager.runAfterInteractions(() => {
-            resetToTop();
+        // Multiple follow-up attempts with increasingly longer delays
+        [0, 50, 150, 300].forEach((delay) => {
+            setTimeout(() => {
+                highlighterRef.current?.scrollTo({ x: 0, y: 0, animated: false });
+            }, delay);
         });
+    };
 
-        return () => {
-            clearTimeout(timeoutId);
-            interactionSubscription.cancel();
-        };
+    // Value changes should trigger a scroll to top reset
+    useEffect(() => {
+        valueChangeCount.current += 1;
+        shouldMaintainScrollTop.current = true;
+        forceScrollToTop();
     }, [value]);
 
-    // Additional effect that runs only once after initial render
-    useEffect(() => {
-        if (!initialRenderComplete.current) {
-            // Set a flag to ensure this runs only once
-            initialRenderComplete.current = true;
+    // Aggressive approach to ensure we start at the top on initial render
+    useLayoutEffect(() => {
+        shouldMaintainScrollTop.current = true;
+        forceScrollToTop();
 
-            // Use multiple timeouts at different intervals to ensure scroll is reset
-            const timeouts = [100, 300, 500].map((delay) =>
-                setTimeout(() => {
-                    if (highlighterRef.current) {
-                        highlighterRef.current.scrollTo({ y: 0, animated: false });
-                    }
-                }, delay)
-            );
-
-            return () => {
-                timeouts.forEach(clearTimeout);
-            };
+        // If autoFocus is true, wait until we've reset scroll before focusing
+        if (autoFocus && inputRef.current && !initialRenderComplete.current) {
+            // Delay focus to avoid scroll position issues
+            setTimeout(() => {
+                if (inputRef.current) {
+                    inputRef.current.focus();
+                    initialRenderComplete.current = true;
+                }
+            }, 250);
         }
-    }, []);
+    }, [autoFocus]);
 
     // Let's add a simple function to explicitly scroll to the top
     const scrollToTop = () => {
@@ -334,15 +330,27 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
 
     const handleChangeText = (text: string) => {
         setValue(Strings.convertTabsToSpaces(text));
-        // Reset scroll position to top after text changes
-        requestAnimationFrame(scrollToTop);
+        // Signal that we need to maintain scroll position at top
+        shouldMaintainScrollTop.current = true;
     };
 
     const handleScroll = (e: NativeSyntheticEvent<TextInputScrollEventData>) => {
-        // Match text input scroll with syntax highlighter scroll
-        const y = e.nativeEvent.contentOffset.y;
-        highlighterRef.current?.scrollTo({ y, animated: false });
+        // Only match text input scroll with syntax highlighter scroll when not resetting
+        if (!shouldMaintainScrollTop.current) {
+            const y = e.nativeEvent.contentOffset.y;
+            highlighterRef.current?.scrollTo({ y, animated: false });
+        }
     };
+
+    // Reset the scroll maintenance flag after a period of time
+    useEffect(() => {
+        if (shouldMaintainScrollTop.current) {
+            const timer = setTimeout(() => {
+                shouldMaintainScrollTop.current = false;
+            }, 500);
+            return () => clearTimeout(timer);
+        }
+    }, [value]);
 
     const handleKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
         const key = e.nativeEvent.key;
@@ -403,7 +411,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 marginBottom,
             }}
             testID={testID}
-            onLayout={scrollToTop}
+            onLayout={forceScrollToTop}
         >
             <SyntaxHighlighter
                 language={language}
@@ -440,7 +448,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 autoCapitalize="none"
                 autoComplete="off"
                 autoCorrect={false}
-                autoFocus={false} // We'll manually focus later to avoid scroll issues
+                autoFocus={false} // We'll handle focus manually for better control
                 keyboardType="ascii-capable"
                 editable={!readOnly}
                 testID={`${testID}-text-input`}

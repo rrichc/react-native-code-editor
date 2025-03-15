@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useLayoutEffect } from 'react';
 import { View, ScrollView, Text, Platform, ColorValue, TextStyle } from 'react-native';
 import Highlighter, { SyntaxHighlighterProps as HighlighterProps } from 'react-syntax-highlighter';
 import * as HLJSSyntaxStyles from 'react-syntax-highlighter/dist/esm/styles/hljs';
@@ -105,15 +105,26 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
     const {
         syntaxStyle = SyntaxHighlighterSyntaxStyles.atomOneDark,
         addedStyle,
-        scrollEnabled = true, // Set default to true
+        scrollEnabled = true,
         showLineNumbers = false,
         forwardedRef,
         testID,
         ...highlighterProps
     } = props;
 
-    // Track if this is the initial render
-    const isInitialRender = useRef(true);
+    // Track if we need to force scroll to top
+    const shouldScrollToTop = useRef(true);
+    const scrollViewRef = useRef<ScrollView | null>(null);
+    
+    // Track when content has changed
+    const contentKey = useRef(`${highlighterProps.children}`);
+    
+    // Store the forwarded ref internally
+    useEffect(() => {
+        if (forwardedRef && typeof forwardedRef === 'object' && 'current' in forwardedRef) {
+            scrollViewRef.current = forwardedRef.current;
+        }
+    }, [forwardedRef]);
 
     // Default values
     const {
@@ -134,35 +145,42 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
     // Prevents the last line from clipping when scrolling
     highlighterProps.children += '\n\n';
 
-    // Force scroll to top when the component mounts and when content changes
-    useEffect(() => {
-        // Use setTimeout to ensure this runs after the component has rendered
-        const timeoutId = setTimeout(() => {
-            if (forwardedRef && 'current' in forwardedRef && forwardedRef.current) {
-                forwardedRef.current.scrollTo({ x: 0, y: 0, animated: false });
-            }
+    // Force scroll to top with multiple approaches
+    const forceScrollToTop = () => {
+        if (!scrollViewRef.current) return;
+        
+        // Immediate attempt
+        scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+        
+        // Follow-up attempts with increasing delays
+        setTimeout(() => {
+            scrollViewRef.current?.scrollTo({ x: 0, y: 0, animated: false });
         }, 0);
         
-        return () => clearTimeout(timeoutId);
-    }, [forwardedRef, highlighterProps.children]);
+        setTimeout(() => {
+            scrollViewRef.current?.scrollTo({ x: 0, y: 0, animated: false });
+        }, 50);
+        
+        setTimeout(() => {
+            scrollViewRef.current?.scrollTo({ x: 0, y: 0, animated: false });
+        }, 200);
+    };
     
-    // Add separate effect specifically for initial render
+    // Check if content has changed, if so we need to force scroll to top
     useEffect(() => {
-        if (isInitialRender.current) {
-            isInitialRender.current = false;
-            
-            // Use multiple timeouts to ensure scroll position is maintained at beginning
-            const timeouts = [50, 100, 300].map(delay => 
-                setTimeout(() => {
-                    if (forwardedRef && 'current' in forwardedRef && forwardedRef.current) {
-                        forwardedRef.current.scrollTo({ x: 0, y: 0, animated: false });
-                    }
-                }, delay)
-            );
-            
-            return () => timeouts.forEach(clearTimeout);
+        const newContentKey = `${highlighterProps.children}`;
+        if (contentKey.current !== newContentKey) {
+            contentKey.current = newContentKey;
+            shouldScrollToTop.current = true;
+            forceScrollToTop();
         }
-    }, [forwardedRef]);
+    }, [highlighterProps.children]);
+    
+    // On mount, force scroll to top
+    useLayoutEffect(() => {
+        shouldScrollToTop.current = true;
+        forceScrollToTop();
+    }, []);
 
     const cleanStyle = (style: TextStyle) => {
         const clean: TextStyle = {
@@ -275,7 +293,24 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
                     },
                 ]}
                 testID={`${testID}-scroll-view`}
-                ref={forwardedRef}
+                ref={(ref) => {
+                    // Store both in our local ref and in the forwarded ref
+                    scrollViewRef.current = ref;
+                    if (forwardedRef) {
+                        if (typeof forwardedRef === 'function') {
+                            forwardedRef(ref);
+                        } else {
+                            // @ts-ignore - we know this is safe
+                            forwardedRef.current = ref;
+                        }
+                    }
+                    
+                    // Force scroll to top on ref set
+                    if (ref && shouldScrollToTop.current) {
+                        shouldScrollToTop.current = false;
+                        ref.scrollTo({ x: 0, y: 0, animated: false });
+                    }
+                }}
                 scrollEnabled={scrollEnabled}
                 automaticallyAdjustContentInsets={false}
                 showsVerticalScrollIndicator={true}
@@ -283,16 +318,18 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
                 overScrollMode="never"
                 scrollEventThrottle={16}
                 keyboardDismissMode="none"
+                contentOffset={{ x: 0, y: 0 }}
                 maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
                 automaticallyAdjustsScrollIndicatorInsets={false}
                 contentInsetAdjustmentBehavior="never"
                 directionalLockEnabled={true}
                 onContentSizeChange={() => {
-                    // Only force scroll to top on initial content size change
-                    if (isInitialRender.current && forwardedRef && 'current' in forwardedRef && forwardedRef.current) {
-                        forwardedRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                    if (shouldScrollToTop.current) {
+                        shouldScrollToTop.current = false;
+                        forceScrollToTop();
                     }
                 }}
+                onLayout={forceScrollToTop}
             >
                 {showLineNumbers && renderLineNumbersBackground()}
                 {renderNode(rows)}
