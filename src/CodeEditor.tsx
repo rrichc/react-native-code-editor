@@ -269,18 +269,27 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
 
     // Force scroll to top after initial render
     useEffect(() => {
-        scrollToTop();
+        // Use setTimeout to ensure this runs after rendering
+        const initialTimeoutId = setTimeout(scrollToTop, 0);
 
-        // We can try to disable auto-scrolling by telling the system not to scroll to the text input
-        if (Platform.OS === 'ios' && inputRef.current) {
-            const nodeHandle = findNodeHandle(inputRef.current);
-            if (nodeHandle) {
-                UIManager.measure(nodeHandle, () => {
-                    scrollToTop();
-                });
+        // Also reset when content changes
+        const handleInitialRender = () => {
+            // Apply focus after scroll is reset if autoFocus is true
+            if (autoFocus && inputRef.current && !initialRenderComplete.current) {
+                inputRef.current.focus();
+                initialRenderComplete.current = true;
             }
-        }
-    }, []);
+            scrollToTop();
+        };
+
+        // Use multiple timeouts to ensure it works
+        const timeouts = [50, 150, 300].map((delay) => setTimeout(handleInitialRender, delay));
+
+        return () => {
+            clearTimeout(initialTimeoutId);
+            timeouts.forEach(clearTimeout);
+        };
+    }, [autoFocus]);
 
     // Negative values move the cursor to the left
     const moveCursor = (current: number, amount: number) => {
@@ -325,12 +334,8 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
 
     const handleChangeText = (text: string) => {
         setValue(Strings.convertTabsToSpaces(text));
-        // Force scroll back to top after text changes
-        requestAnimationFrame(() => {
-            if (highlighterRef.current) {
-                highlighterRef.current.scrollTo({ y: 0, animated: false });
-            }
-        });
+        // Reset scroll position to top after text changes
+        requestAnimationFrame(scrollToTop);
     };
 
     const handleScroll = (e: NativeSyntheticEvent<TextInputScrollEventData>) => {
@@ -404,7 +409,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 language={language}
                 addedStyle={addedStyle}
                 syntaxStyle={syntaxStyle}
-                scrollEnabled={false}
+                scrollEnabled={true}
                 showLineNumbers={showLineNumbers}
                 testID={`${testID}-syntax-highlighter`}
                 ref={highlighterRef}
@@ -435,13 +440,12 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 autoCapitalize="none"
                 autoComplete="off"
                 autoCorrect={false}
-                autoFocus={false} // Changed from autoFocus prop to false to prevent automatic scrolling
+                autoFocus={false} // We'll manually focus later to avoid scroll issues
                 keyboardType="ascii-capable"
                 editable={!readOnly}
                 testID={`${testID}-text-input`}
                 ref={inputRef}
                 multiline
-                scrollEnabled={false}
             />
         </View>
     );

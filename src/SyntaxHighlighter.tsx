@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { View, ScrollView, Text, Platform, ColorValue, TextStyle } from 'react-native';
 import Highlighter, { SyntaxHighlighterProps as HighlighterProps } from 'react-syntax-highlighter';
 import * as HLJSSyntaxStyles from 'react-syntax-highlighter/dist/esm/styles/hljs';
@@ -105,12 +105,15 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
     const {
         syntaxStyle = SyntaxHighlighterSyntaxStyles.atomOneDark,
         addedStyle,
-        scrollEnabled,
+        scrollEnabled = true, // Set default to true
         showLineNumbers = false,
         forwardedRef,
         testID,
         ...highlighterProps
     } = props;
+
+    // Track if this is the initial render
+    const isInitialRender = useRef(true);
 
     // Default values
     const {
@@ -142,6 +145,24 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
         
         return () => clearTimeout(timeoutId);
     }, [forwardedRef, highlighterProps.children]);
+    
+    // Add separate effect specifically for initial render
+    useEffect(() => {
+        if (isInitialRender.current) {
+            isInitialRender.current = false;
+            
+            // Use multiple timeouts to ensure scroll position is maintained at beginning
+            const timeouts = [50, 100, 300].map(delay => 
+                setTimeout(() => {
+                    if (forwardedRef && 'current' in forwardedRef && forwardedRef.current) {
+                        forwardedRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                    }
+                }, delay)
+            );
+            
+            return () => timeouts.forEach(clearTimeout);
+        }
+    }, [forwardedRef]);
 
     const cleanStyle = (style: TextStyle) => {
         const clean: TextStyle = {
@@ -266,8 +287,12 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
                 automaticallyAdjustsScrollIndicatorInsets={false}
                 contentInsetAdjustmentBehavior="never"
                 directionalLockEnabled={true}
-                disableScrollViewPanResponder={true}
-                removeClippedSubviews={false}
+                onContentSizeChange={() => {
+                    // Only force scroll to top on initial content size change
+                    if (isInitialRender.current && forwardedRef && 'current' in forwardedRef && forwardedRef.current) {
+                        forwardedRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                    }
+                }}
             >
                 {showLineNumbers && renderLineNumbersBackground()}
                 {renderNode(rows)}
