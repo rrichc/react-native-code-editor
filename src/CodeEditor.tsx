@@ -10,9 +10,6 @@ import {
     TextInputScrollEventData,
     TextInputKeyPressEventData,
     TextInputSelectionChangeEventData,
-    InteractionManager,
-    UIManager,
-    findNodeHandle,
 } from 'react-native';
 import SyntaxHighlighter, {
     SyntaxHighlighterStyleType,
@@ -183,9 +180,9 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     const highlighterRef = useRef<ScrollView>(null);
     const inputRef = useRef<TextInput>(null);
     const inputSelection = useRef<TextInputSelectionType>({ start: 0, end: 0 });
-    const initialRenderComplete = useRef<boolean>(false);
-    const valueChangeCount = useRef<number>(0);
-    const shouldMaintainScrollTop = useRef<boolean>(true);
+    const isInitialRender = useRef<boolean>(true);
+    const userScrollPosition = useRef<number>(0);
+    const isUserInteracting = useRef<boolean>(false);
 
     // Only when line numbers are showing
     const lineNumbersPadding = showLineNumbers ? 1.75 * fontSize : undefined;
@@ -217,74 +214,36 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
         }
     }, [onChange, value]);
 
-    // Define a more thorough approach to ensuring the scroll position is at the top
-    const forceScrollToTop = () => {
-        if (!highlighterRef.current) return;
-
-        // Immediate attempt
-        highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
-
-        // Multiple follow-up attempts with increasingly longer delays
-        [0, 50, 150, 300].forEach((delay) => {
-            setTimeout(() => {
-                highlighterRef.current?.scrollTo({ x: 0, y: 0, animated: false });
-            }, delay);
-        });
-    };
-
-    // Value changes should trigger a scroll to top reset
-    useEffect(() => {
-        valueChangeCount.current += 1;
-        shouldMaintainScrollTop.current = true;
-        forceScrollToTop();
-    }, [value]);
-
-    // Aggressive approach to ensure we start at the top on initial render
+    // Force scroll to top only on initial render
     useLayoutEffect(() => {
-        shouldMaintainScrollTop.current = true;
-        forceScrollToTop();
+        if (isInitialRender.current && highlighterRef.current) {
+            // Only scroll to top on very first render
+            highlighterRef.current.scrollTo({ y: 0, animated: false });
 
-        // If autoFocus is true, wait until we've reset scroll before focusing
-        if (autoFocus && inputRef.current && !initialRenderComplete.current) {
-            // Delay focus to avoid scroll position issues
-            setTimeout(() => {
-                if (inputRef.current) {
+            // Set up a few timeouts to ensure it takes effect
+            const timeouts = [50, 150, 300].map((delay) =>
+                setTimeout(() => {
+                    if (isInitialRender.current && highlighterRef.current) {
+                        highlighterRef.current.scrollTo({ y: 0, animated: false });
+                    }
+                }, delay)
+            );
+
+            // Mark initial render complete after delay
+            const finalTimeout = setTimeout(() => {
+                isInitialRender.current = false;
+
+                // Apply focus after scroll is reset if autoFocus is true
+                if (autoFocus && inputRef.current) {
                     inputRef.current.focus();
-                    initialRenderComplete.current = true;
                 }
-            }, 250);
+            }, 500);
+
+            return () => {
+                timeouts.forEach(clearTimeout);
+                clearTimeout(finalTimeout);
+            };
         }
-    }, [autoFocus]);
-
-    // Let's add a simple function to explicitly scroll to the top
-    const scrollToTop = () => {
-        if (highlighterRef.current) {
-            highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
-        }
-    };
-
-    // Force scroll to top after initial render
-    useEffect(() => {
-        // Use setTimeout to ensure this runs after rendering
-        const initialTimeoutId = setTimeout(scrollToTop, 0);
-
-        // Also reset when content changes
-        const handleInitialRender = () => {
-            // Apply focus after scroll is reset if autoFocus is true
-            if (autoFocus && inputRef.current && !initialRenderComplete.current) {
-                inputRef.current.focus();
-                initialRenderComplete.current = true;
-            }
-            scrollToTop();
-        };
-
-        // Use multiple timeouts to ensure it works
-        const timeouts = [50, 150, 300].map((delay) => setTimeout(handleInitialRender, delay));
-
-        return () => {
-            clearTimeout(initialTimeoutId);
-            timeouts.forEach(clearTimeout);
-        };
     }, [autoFocus]);
 
     // Negative values move the cursor to the left
@@ -329,48 +288,91 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     };
 
     const handleChangeText = (text: string) => {
+        // Critical: Don't reset scroll position on text changes
+        // Store current scroll position before text change
+        const currentScrollPos = userScrollPosition.current;
+
         setValue(Strings.convertTabsToSpaces(text));
-        // Signal that we need to maintain scroll position at top
-        shouldMaintainScrollTop.current = true;
+
+        // Restore scroll position after text change on next tick
+        if (!isInitialRender.current) {
+            requestAnimationFrame(() => {
+                if (highlighterRef.current) {
+                    highlighterRef.current.scrollTo({ y: currentScrollPos, animated: false });
+                }
+            });
+        }
     };
 
     const handleScroll = (e: NativeSyntheticEvent<TextInputScrollEventData>) => {
-        // Only match text input scroll with syntax highlighter scroll when not resetting
-        if (!shouldMaintainScrollTop.current) {
-            const y = e.nativeEvent.contentOffset.y;
-            highlighterRef.current?.scrollTo({ y, animated: false });
+        // Track user's scroll position
+        userScrollPosition.current = e.nativeEvent.contentOffset.y;
+        isUserInteracting.current = true;
+
+        // Sync highlighter scroll with text input scroll
+        const y = e.nativeEvent.contentOffset.y;
+        if (highlighterRef.current) {
+            highlighterRef.current.scrollTo({ y, animated: false });
         }
+
+        // Reset user interaction flag after a delay
+        setTimeout(() => {
+            isUserInteracting.current = false;
+        }, 150);
     };
 
-    // Reset the scroll maintenance flag after a period of time
-    useEffect(() => {
-        if (shouldMaintainScrollTop.current) {
-            const timer = setTimeout(() => {
-                shouldMaintainScrollTop.current = false;
-            }, 500);
-            return () => clearTimeout(timer);
-        }
-    }, [value]);
-
     const handleKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+        // Mark that user is interacting, to prevent automatic scrolling
+        isUserInteracting.current = true;
+
         const key = e.nativeEvent.key;
         switch (key) {
             case 'Enter':
                 setTimeout(() => {
+                    // Store scroll position before indentation
+                    const currentScrollPos = userScrollPosition.current;
                     setValue((curr) => addIndentation(curr));
+
+                    // Restore scroll position after indentation
+                    setTimeout(() => {
+                        if (highlighterRef.current) {
+                            highlighterRef.current.scrollTo({
+                                y: currentScrollPos,
+                                animated: false,
+                            });
+                        }
+                    }, 10);
                 }, 10);
                 break;
             default:
                 if (Braces.isOpenBrace(key)) {
                     setTimeout(() => {
+                        // Store scroll position before adding closing brace
+                        const currentScrollPos = userScrollPosition.current;
                         setValue((curr) => addClosingBrace(curr, key));
+
+                        // Restore scroll position after adding closing brace
+                        setTimeout(() => {
+                            if (highlighterRef.current) {
+                                highlighterRef.current.scrollTo({
+                                    y: currentScrollPos,
+                                    animated: false,
+                                });
+                            }
+                        }, 10);
                     }, 10);
                 }
                 break;
         }
+
         if (onKeyPress) {
             onKeyPress(key);
         }
+
+        // Reset user interaction flag after a delay
+        setTimeout(() => {
+            isUserInteracting.current = false;
+        }, 150);
     };
 
     const handleSelectionChange = (e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
@@ -394,9 +396,17 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
             }
         }
 
-        // Ensure scroll is at the top when content size changes
-        if (highlighterRef.current) {
+        // Don't auto-scroll to top on content size change if user is interacting
+        // Only scroll to top if it's initial render
+        if (isInitialRender.current && highlighterRef.current) {
             highlighterRef.current.scrollTo({ y: 0, animated: false });
+        } else if (
+            !isUserInteracting.current &&
+            !isInitialRender.current &&
+            highlighterRef.current
+        ) {
+            // Otherwise maintain the user's scroll position
+            highlighterRef.current.scrollTo({ y: userScrollPosition.current, animated: false });
         }
     };
 
@@ -411,7 +421,12 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 marginBottom,
             }}
             testID={testID}
-            onLayout={forceScrollToTop}
+            onLayout={() => {
+                // Only force scroll to top on initial layout
+                if (isInitialRender.current && highlighterRef.current) {
+                    highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                }
+            }}
         >
             <SyntaxHighlighter
                 language={language}
@@ -421,6 +436,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 showLineNumbers={showLineNumbers}
                 testID={`${testID}-syntax-highlighter`}
                 ref={highlighterRef}
+                preserveScrollPosition={!isInitialRender.current}
             >
                 {value}
             </SyntaxHighlighter>
