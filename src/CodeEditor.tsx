@@ -1,4 +1,4 @@
-import React, { useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { useEffect, useImperativeHandle, useRef, useState, useLayoutEffect } from 'react';
 import {
     View,
     TextInput,
@@ -180,6 +180,9 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     const highlighterRef = useRef<ScrollView>(null);
     const inputRef = useRef<TextInput>(null);
     const inputSelection = useRef<TextInputSelectionType>({ start: 0, end: 0 });
+    const isInitialRender = useRef<boolean>(true);
+    const userScrollPosition = useRef<number>(0);
+    const isUserInteracting = useRef<boolean>(false);
 
     // Only when line numbers are showing
     const lineNumbersPadding = showLineNumbers ? 1.75 * fontSize : undefined;
@@ -210,6 +213,38 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
             onChange(value);
         }
     }, [onChange, value]);
+
+    // Force scroll to top only on initial render
+    useLayoutEffect(() => {
+        if (isInitialRender.current && highlighterRef.current) {
+            // Only scroll to top on very first render
+            highlighterRef.current.scrollTo({ y: 0, animated: false });
+
+            // Set up a few timeouts to ensure it takes effect
+            const timeouts = [50, 150, 300].map((delay) =>
+                setTimeout(() => {
+                    if (isInitialRender.current && highlighterRef.current) {
+                        highlighterRef.current.scrollTo({ y: 0, animated: false });
+                    }
+                }, delay)
+            );
+
+            // Mark initial render complete after delay
+            const finalTimeout = setTimeout(() => {
+                isInitialRender.current = false;
+
+                // Apply focus after scroll is reset if autoFocus is true
+                if (autoFocus && inputRef.current) {
+                    inputRef.current.focus();
+                }
+            }, 500);
+
+            return () => {
+                timeouts.forEach(clearTimeout);
+                clearTimeout(finalTimeout);
+            };
+        }
+    }, [autoFocus]);
 
     // Negative values move the cursor to the left
     const moveCursor = (current: number, amount: number) => {
@@ -253,34 +288,91 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
     };
 
     const handleChangeText = (text: string) => {
+        // Critical: Don't reset scroll position on text changes
+        // Store current scroll position before text change
+        const currentScrollPos = userScrollPosition.current;
+
         setValue(Strings.convertTabsToSpaces(text));
+
+        // Restore scroll position after text change on next tick
+        if (!isInitialRender.current) {
+            requestAnimationFrame(() => {
+                if (highlighterRef.current) {
+                    highlighterRef.current.scrollTo({ y: currentScrollPos, animated: false });
+                }
+            });
+        }
     };
 
     const handleScroll = (e: NativeSyntheticEvent<TextInputScrollEventData>) => {
-        // Match text input scroll with syntax highlighter scroll
+        // Track user's scroll position
+        userScrollPosition.current = e.nativeEvent.contentOffset.y;
+        isUserInteracting.current = true;
+
+        // Sync highlighter scroll with text input scroll
         const y = e.nativeEvent.contentOffset.y;
-        highlighterRef.current?.scrollTo({ y, animated: false });
+        if (highlighterRef.current) {
+            highlighterRef.current.scrollTo({ y, animated: false });
+        }
+
+        // Reset user interaction flag after a delay
+        setTimeout(() => {
+            isUserInteracting.current = false;
+        }, 150);
     };
 
     const handleKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+        // Mark that user is interacting, to prevent automatic scrolling
+        isUserInteracting.current = true;
+
         const key = e.nativeEvent.key;
         switch (key) {
             case 'Enter':
                 setTimeout(() => {
+                    // Store scroll position before indentation
+                    const currentScrollPos = userScrollPosition.current;
                     setValue((curr) => addIndentation(curr));
+
+                    // Restore scroll position after indentation
+                    setTimeout(() => {
+                        if (highlighterRef.current) {
+                            highlighterRef.current.scrollTo({
+                                y: currentScrollPos,
+                                animated: false,
+                            });
+                        }
+                    }, 10);
                 }, 10);
                 break;
             default:
                 if (Braces.isOpenBrace(key)) {
                     setTimeout(() => {
+                        // Store scroll position before adding closing brace
+                        const currentScrollPos = userScrollPosition.current;
                         setValue((curr) => addClosingBrace(curr, key));
+
+                        // Restore scroll position after adding closing brace
+                        setTimeout(() => {
+                            if (highlighterRef.current) {
+                                highlighterRef.current.scrollTo({
+                                    y: currentScrollPos,
+                                    animated: false,
+                                });
+                            }
+                        }, 10);
                     }, 10);
                 }
                 break;
         }
+
         if (onKeyPress) {
             onKeyPress(key);
         }
+
+        // Reset user interaction flag after a delay
+        setTimeout(() => {
+            isUserInteracting.current = false;
+        }, 150);
     };
 
     const handleSelectionChange = (e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
@@ -303,6 +395,19 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 setContentHeight(newHeight);
             }
         }
+
+        // Don't auto-scroll to top on content size change if user is interacting
+        // Only scroll to top if it's initial render
+        if (isInitialRender.current && highlighterRef.current) {
+            highlighterRef.current.scrollTo({ y: 0, animated: false });
+        } else if (
+            !isUserInteracting.current &&
+            !isInitialRender.current &&
+            highlighterRef.current
+        ) {
+            // Otherwise maintain the user's scroll position
+            highlighterRef.current.scrollTo({ y: userScrollPosition.current, animated: false });
+        }
     };
 
     const finalHeight = autoGrow ? contentHeight || height : height;
@@ -316,15 +421,22 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 marginBottom,
             }}
             testID={testID}
+            onLayout={() => {
+                // Only force scroll to top on initial layout
+                if (isInitialRender.current && highlighterRef.current) {
+                    highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                }
+            }}
         >
             <SyntaxHighlighter
                 language={language}
                 addedStyle={addedStyle}
                 syntaxStyle={syntaxStyle}
-                scrollEnabled={false}
+                scrollEnabled={true}
                 showLineNumbers={showLineNumbers}
                 testID={`${testID}-syntax-highlighter`}
                 ref={highlighterRef}
+                preserveScrollPosition={!isInitialRender.current}
             >
                 {value}
             </SyntaxHighlighter>
@@ -352,7 +464,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 autoCapitalize="none"
                 autoComplete="off"
                 autoCorrect={false}
-                autoFocus={autoFocus}
+                autoFocus={false} // We'll handle focus manually for better control
                 keyboardType="ascii-capable"
                 editable={!readOnly}
                 testID={`${testID}-text-input`}

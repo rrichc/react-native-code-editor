@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, ScrollView, Text, Platform, ColorValue, TextStyle } from 'react-native';
+import React, { useEffect, useRef, useLayoutEffect } from 'react';
+import { View, ScrollView, Text, Platform, ColorValue, TextStyle, findNodeHandle } from 'react-native';
 import Highlighter, { SyntaxHighlighterProps as HighlighterProps } from 'react-syntax-highlighter';
 import * as HLJSSyntaxStyles from 'react-syntax-highlighter/dist/esm/styles/hljs';
 
@@ -90,6 +90,12 @@ export type SyntaxHighlighterProps = HighlighterProps & {
      * Whether to allow scrolling on the syntax highlighter.
      */
     scrollEnabled?: boolean;
+    
+    /**
+     * Whether to preserve scroll position when content changes.
+     * If true, won't reset scroll to top when content changes.
+     */
+    preserveScrollPosition?: boolean;
 
     /**
      * Test ID used for testing.
@@ -105,12 +111,27 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
     const {
         syntaxStyle = SyntaxHighlighterSyntaxStyles.atomOneDark,
         addedStyle,
-        scrollEnabled,
+        scrollEnabled = true,
         showLineNumbers = false,
+        preserveScrollPosition = false,
         forwardedRef,
         testID,
         ...highlighterProps
     } = props;
+
+    // Track whether this is the initial render
+    const isInitialRender = useRef(true);
+    const scrollViewRef = useRef<ScrollView | null>(null);
+    
+    // Track when content has changed
+    const contentKey = useRef(`${highlighterProps.children}`);
+    
+    // Store the forwarded ref internally
+    useEffect(() => {
+        if (forwardedRef && typeof forwardedRef === 'object' && 'current' in forwardedRef) {
+            scrollViewRef.current = forwardedRef.current;
+        }
+    }, [forwardedRef]);
 
     // Default values
     const {
@@ -130,6 +151,74 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
 
     // Prevents the last line from clipping when scrolling
     highlighterProps.children += '\n\n';
+
+    // More aggressive approach to ensure scroll is at top on initial render
+    const forceScrollToTop = () => {
+        if (!scrollViewRef.current || (preserveScrollPosition && !isInitialRender.current)) return;
+        
+        // Use multiple strategies to ensure we start at the top
+        try {
+            // Direct method
+            scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+            
+            // Try with a node handle if available (React Native specific)
+            const nodeHandle = findNodeHandle(scrollViewRef.current);
+            if (nodeHandle) {
+                // Force a reset of the ScrollView's internal state
+                scrollViewRef.current.setNativeProps({
+                    contentOffset: { x: 0, y: 0 }
+                });
+            }
+        } catch (err) {
+            console.warn('Failed to force scroll to top:', err);
+        }
+        
+        // Additional attempts with delays for reliability
+        const timeouts = [0, 50, 150, 300, 500].map(delay => 
+            setTimeout(() => {
+                if (!scrollViewRef.current || 
+                    (preserveScrollPosition && !isInitialRender.current)) return;
+                
+                try {
+                    scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                    scrollViewRef.current.setNativeProps({
+                        contentOffset: { x: 0, y: 0 }
+                    });
+                } catch (err) {
+                    // Ignore errors in timeouts
+                }
+            }, delay)
+        );
+        
+        // Clean up timeouts
+        return () => timeouts.forEach(clearTimeout);
+    };
+    
+    // On mount and when dependenices change, force scroll to top
+    useLayoutEffect(() => {
+        const cleanupTimeouts = forceScrollToTop();
+        
+        // After all attempts, mark initial render as complete
+        const finalTimeout = setTimeout(() => {
+            isInitialRender.current = false;
+        }, 600);
+        
+        return () => {
+            if (cleanupTimeouts) cleanupTimeouts();
+            clearTimeout(finalTimeout);
+        };
+    }, [preserveScrollPosition]);
+    
+    // Check if content has changed
+    useEffect(() => {
+        const newContentKey = `${highlighterProps.children}`;
+        if (contentKey.current !== newContentKey) {
+            contentKey.current = newContentKey;
+            if (!preserveScrollPosition || isInitialRender.current) {
+                forceScrollToTop();
+            }
+        }
+    }, [highlighterProps.children, preserveScrollPosition]);
 
     const cleanStyle = (style: TextStyle) => {
         const clean: TextStyle = {
@@ -242,8 +331,69 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
                     },
                 ]}
                 testID={`${testID}-scroll-view`}
-                ref={forwardedRef}
+                ref={(ref) => {
+                    // Store both in our local ref and in the forwarded ref
+                    scrollViewRef.current = ref;
+                    if (forwardedRef) {
+                        if (typeof forwardedRef === 'function') {
+                            forwardedRef(ref);
+                        } else {
+                            // @ts-ignore - we know this is safe
+                            forwardedRef.current = ref;
+                        }
+                    }
+                    
+                    // Immediately force scroll to top when ref is set if it's initial render
+                    if (ref && (isInitialRender.current || !preserveScrollPosition)) {
+                        try {
+                            ref.scrollTo({ x: 0, y: 0, animated: false });
+                            ref.setNativeProps({
+                                contentOffset: { x: 0, y: 0 }
+                            });
+                        } catch (err) {
+                            console.warn('Failed to set initial scroll position:', err);
+                        }
+                    }
+                }}
                 scrollEnabled={scrollEnabled}
+                automaticallyAdjustContentInsets={false}
+                showsVerticalScrollIndicator={true}
+                keyboardShouldPersistTaps="always"
+                overScrollMode="never"
+                scrollEventThrottle={16}
+                keyboardDismissMode="none"
+                // Explicitly set initial scroll position to top
+                contentOffset={{x: 0, y: 0}}
+                // Prevent any auto-scrolling to cursor/focused element
+                maintainVisibleContentPosition={{autoscrollToTopThreshold: 0, minIndexForVisible: 0}}
+                automaticallyAdjustsScrollIndicatorInsets={false}
+                // Disable all automatic scroll adjustments
+                contentInsetAdjustmentBehavior="never"
+                directionalLockEnabled={true}
+                onContentSizeChange={() => {
+                    if ((isInitialRender.current || !preserveScrollPosition) && scrollViewRef.current) {
+                        try {
+                            scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                            scrollViewRef.current.setNativeProps({
+                                contentOffset: { x: 0, y: 0 }
+                            });
+                        } catch (err) {
+                            // Ignore errors in callbacks
+                        }
+                    }
+                }}
+                onLayout={() => {
+                    if ((isInitialRender.current || !preserveScrollPosition) && scrollViewRef.current) {
+                        try {
+                            scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: false });
+                            scrollViewRef.current.setNativeProps({
+                                contentOffset: { x: 0, y: 0 }
+                            });
+                        } catch (err) {
+                            // Ignore errors in callbacks
+                        }
+                    }
+                }}
             >
                 {showLineNumbers && renderLineNumbersBackground()}
                 {renderNode(rows)}
