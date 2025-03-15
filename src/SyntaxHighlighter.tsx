@@ -257,17 +257,17 @@ const SyntaxHighlighter = (props: PropsWithForwardRef): JSX.Element => {
                 ref={forwardedRef}
                 scrollEnabled={scrollEnabled}
                 automaticallyAdjustContentInsets={false}
-                contentOffset={{ x: 0, y: 0 }}
                 showsVerticalScrollIndicator={true}
-                keyboardShouldPersistTaps="handled"
+                keyboardShouldPersistTaps="always"
                 overScrollMode="never"
                 scrollEventThrottle={16}
-                onContentSizeChange={() => {
-                    // Force scroll to top whenever content size changes
-                    if (forwardedRef && 'current' in forwardedRef && forwardedRef.current) {
-                        forwardedRef.current.scrollTo({ x: 0, y: 0, animated: false });
-                    }
-                }}
+                keyboardDismissMode="none"
+                maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+                automaticallyAdjustsScrollIndicatorInsets={false}
+                contentInsetAdjustmentBehavior="never"
+                directionalLockEnabled={true}
+                disableScrollViewPanResponder={true}
+                removeClippedSubviews={false}
             >
                 {showLineNumbers && renderLineNumbersBackground()}
                 {renderNode(rows)}

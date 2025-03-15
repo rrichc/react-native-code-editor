@@ -11,6 +11,8 @@ import {
     TextInputKeyPressEventData,
     TextInputSelectionChangeEventData,
     InteractionManager,
+    UIManager,
+    findNodeHandle,
 } from 'react-native';
 import SyntaxHighlighter, {
     SyntaxHighlighterStyleType,
@@ -258,6 +260,28 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
         }
     }, []);
 
+    // Let's add a simple function to explicitly scroll to the top
+    const scrollToTop = () => {
+        if (highlighterRef.current) {
+            highlighterRef.current.scrollTo({ x: 0, y: 0, animated: false });
+        }
+    };
+
+    // Force scroll to top after initial render
+    useEffect(() => {
+        scrollToTop();
+
+        // We can try to disable auto-scrolling by telling the system not to scroll to the text input
+        if (Platform.OS === 'ios' && inputRef.current) {
+            const nodeHandle = findNodeHandle(inputRef.current);
+            if (nodeHandle) {
+                UIManager.measure(nodeHandle, () => {
+                    scrollToTop();
+                });
+            }
+        }
+    }, []);
+
     // Negative values move the cursor to the left
     const moveCursor = (current: number, amount: number) => {
         const newPosition = current + amount;
@@ -374,12 +398,7 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 marginBottom,
             }}
             testID={testID}
-            onLayout={() => {
-                // Force scroll to top when layout occurs
-                if (highlighterRef.current) {
-                    highlighterRef.current.scrollTo({ y: 0, animated: false });
-                }
-            }}
+            onLayout={scrollToTop}
         >
             <SyntaxHighlighter
                 language={language}
@@ -416,12 +435,13 @@ const CodeEditor = (props: PropsWithForwardRef): JSX.Element => {
                 autoCapitalize="none"
                 autoComplete="off"
                 autoCorrect={false}
-                autoFocus={autoFocus}
+                autoFocus={false} // Changed from autoFocus prop to false to prevent automatic scrolling
                 keyboardType="ascii-capable"
                 editable={!readOnly}
                 testID={`${testID}-text-input`}
                 ref={inputRef}
                 multiline
+                scrollEnabled={false}
             />
         </View>
     );
